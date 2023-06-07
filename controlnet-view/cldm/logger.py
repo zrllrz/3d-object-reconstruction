@@ -5,7 +5,7 @@ import torch
 import torchvision
 from PIL import Image
 from pytorch_lightning.callbacks import Callback
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.utilities import rank_zero_only
 
 
 class ImageLogger(Callback):
@@ -14,7 +14,11 @@ class ImageLogger(Callback):
                  log_images_kwargs=None):
         super().__init__()
         self.rescale = rescale
+
+        # self.index = 0
+
         self.batch_freq = batch_frequency
+        # self.step_frequency = step_frequency
         self.max_images = max_images
         self.split = split
         if not increase_log_steps:
@@ -79,6 +83,7 @@ class ImageLogger(Callback):
     def check_frequency(self, check_idx):
         return check_idx % self.batch_freq == 0
 
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        # self.index += 1
         if not self.disabled:
             self.log_img(pl_module, batch, batch_idx, split=self.split)

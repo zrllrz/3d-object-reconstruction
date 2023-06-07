@@ -16,7 +16,7 @@ from ldm.modules.diffusionmodules.util import (
 
 from einops import rearrange, repeat
 from torchvision.utils import make_grid
-from torch.optim.lr_scheduler import MultiStepLR
+from torch.optim.lr_scheduler import MultiStepLR, LambdaLR
 from ldm.modules.attention import SpatialTransformer, BasicTransformerBlock
 from ldm.modules.diffusionmodules.openaimodel import UNetModel, TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock
 from ldm.models.diffusion.ddpm import LatentDiffusion
@@ -24,8 +24,8 @@ from ldm.util import log_txt_as_img, exists, instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
 from .encoding import FreqEncoder_torch
+from .lr_scheduler import LambdaLinearScheduler
 
-from .clip_img import FrozenOpenCLIPImg
 
 
 class ControlledUnetModel(UNetModel):
@@ -205,6 +205,8 @@ class ControlNet(nn.Module):
                     else:
                         disabled_sa = False
 
+                    # DISABLE FXXKING ATTENTIONS!!!
+                    '''
                     if not exists(num_attention_blocks) or nr < num_attention_blocks[level]:
                         layers.append(
                             AttentionBlock(
@@ -219,6 +221,7 @@ class ControlNet(nn.Module):
                                 use_checkpoint=use_checkpoint
                             )
                         )
+                    '''
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self.zero_convs.append(self.make_zero_conv(ch))
                 self._feature_size += ch
@@ -266,17 +269,18 @@ class ControlNet(nn.Module):
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
-            AttentionBlock(
-                ch,
-                use_checkpoint=use_checkpoint,
-                num_heads=num_heads,
-                num_head_channels=dim_head,
-                use_new_attention_order=use_new_attention_order,
-            ) if not use_spatial_transformer else SpatialTransformer(  # always uses a self-attn
-                ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim,
-                disable_self_attn=disable_middle_self_attn, use_linear=use_linear_in_transformer,
-                use_checkpoint=use_checkpoint
-            ),
+            # DISABLE FXXKING ATTENTIONS!!!
+            # AttentionBlock(
+            #     ch,
+            #     use_checkpoint=use_checkpoint,
+            #     num_heads=num_heads,
+            #     num_head_channels=dim_head,
+            #     use_new_attention_order=use_new_attention_order,
+            # ) if not use_spatial_transformer else SpatialTransformer(  # always uses a self-attn
+            #     ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim,
+            #     disable_self_attn=disable_middle_self_attn, use_linear=use_linear_in_transformer,
+            #     use_checkpoint=use_checkpoint
+            # ),
             ResBlock(
                 ch,
                 time_embed_dim,
@@ -333,16 +337,6 @@ class ControlLDM(LatentDiffusion):
         self.only_mid_control = only_mid_control
         self.control_scales = [1.0] * 13
 
-
-        # self.clip_hint = FrozenOpenCLIPImg(device='cpu')
-        # if self.control_model.context_dim != 1024:
-        #     print('need to align the clip img dimension with the context dimension of ctrl net')
-        #     self.clip_hint_end = nn.Sequential(
-        #         linear(1024, self.control_model.context_dim)
-        #     )
-        # else:
-        #     self.clip_hint_end = None
-
         '''
             view encoding modules
         '''
@@ -379,31 +373,18 @@ class ControlLDM(LatentDiffusion):
                 view_l2
             )
 
-    # def get_clip_embedding(self, control):
-    #     with torch.no_grad():
-    #         assert self.clip_hint is not None
-    #         hint_clip_embedding_ctrl = self.clip_hint.encode(control)
-    #         hint_clip_embedding_diff = self.clip_hint.encode_five(control)
-    #
-    #     if self.clip_hint_end is not None:
-    #         hint_clip_embedding_ctrl = self.clip_hint_end(hint_clip_embedding_ctrl)
-    #         hint_clip_embedding_diff = self.clip_hint_end(hint_clip_embedding_diff)
-    #
-    #     hint_clip_embedding_ctrl = hint_clip_embedding_ctrl.unsqueeze(dim=1)
-    #
-    #     return hint_clip_embedding_ctrl, hint_clip_embedding_diff
-
     def get_view_emb(self, view_linear):
         view_emb = self.view_enc(view_linear)
         view_emb = self.view_embed(view_emb)
-        # for name, parms in self.linear_input_view_blocks.named_parameters():
-        #     print('-->name:', name)
-        #     print('-->para:', parms)
-        #     print('-->grad_requirs:', parms.requires_grad)
-        #     print('-->grad_value:', parms.grad)
-        #     print("===")
-        # view_linear = guided_view_linear.view(-1, 4, self.control_model.context_dim)
-        # guided_view_linear = torch.nn.functional.normalize(guided_view_linear, p=2, dim=-1)
+        # print(self.view_embed[0])
+        if self.view_embed[0].weight.grad is not None:
+            self.log(
+                "view_l0.weight",
+                torch.norm(self.view_embed[0].weight.grad, p=2, dim=None).item(),
+                on_step=True,
+                on_epoch=True
+            )
+
         return view_emb
 
     # @torch.no_grad()
@@ -603,9 +584,23 @@ class ControlLDM(LatentDiffusion):
                 {"params": params_view, "lr": lr * 10.0}
             ]
         )
-        # opt_view = torch.optim.AdamW(params, lr=lr * 1000.0)
-        sched = MultiStepLR(optimizer=opt, milestones=[1000], gamma=0.1)
-        return [opt], [sched]
+
+        # sched = MultiStepLR(optimizer=opt, milestones=[1000], gamma=0.1)
+        scheduler = LambdaLinearScheduler(
+            warm_up_steps=[100],
+            cycle_lengths=[10000000000000],
+            f_start=[1.0e-6],
+            f_max=[1.0],
+            f_min=[1.0]
+        )
+        sched = [
+            {
+                'scheduler': LambdaLR(opt, lr_lambda=scheduler.schedule),
+                'interval': 'step',
+                'frequency': 1
+            }
+        ]
+        return [opt], sched
 
     def low_vram_shift(self, is_diffusing):
         if is_diffusing:
