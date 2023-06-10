@@ -184,11 +184,11 @@ class MyDataset(Dataset):
         file = open(path, 'w')
         for seq in self.sequence:
             img_path = random.choice(self.sequence_imgs[seq][0])
-            # text = blip_run(img_path)
+            text = blip_run(img_path)
             seq.replace(self.path + '/', '')
             file.write(seq)
             file.write('\n')
-            # file.write(text)
+            file.write(text)
             file.write('\n')
             # print(seq)
             # print(text)
@@ -240,40 +240,48 @@ class MyDataset(Dataset):
 
 # train_data=MyDataset("../co3d-main/dataset","train",512,12,False)
 class ObjaverseDataset(Dataset):
-    def __init__(self, path, pairs, zero123):
+    def __init__(self, path, pairs, zero123, identity):
         self.path = path
         self.pairs = pairs
         self.zero123 = zero123
+        self.identity = identity
+        with open(self.path + "/valid_paths.json") as file:
+            self.objects = json.load(file)
         # self.dirs=os.listdir(self.path)
         # self.img_cam={}
         '''
         for i in range(120):
             self.imgs.append(self.path+"/"+str(i).zfill(3)+".png")
         '''
+        # self.img_cam[self.path+"/"+str(i).zfill(3)+".png"]=self.path+"/"+str(i).zfill(3)+".npy"
 
     def __getitem__(self, index):
+        # print(len(self.objects))
+        object_idx = index // self.pairs
+        # print(object_idx)
         dir = self.path
-        img_pair = random.sample(range(12), 2)
-        img1_path = dir + "/" + str(img_pair[0]).zfill(3) + ".png"
-        img2_path = dir + "/" + str(img_pair[1]).zfill(3) + ".png"
+        if self.identity:
+            img_pair = random.sample(range(12), 1)
+            img_pair.append(img_pair[0])
+        else:
+            img_pair = random.sample(range(12), 2)
+        img1_path = dir + "/" + self.objects[object_idx] + "/" + str(img_pair[0]).zfill(3) + ".png"
+        img2_path = dir + "/" + self.objects[object_idx] + "/" + str(img_pair[1]).zfill(3) + ".png"
         pose1 = np.load(img1_path.replace("png", "npy"))
         pose2 = np.load(img2_path.replace("png", "npy"))
+
         img1 = read_image(img1_path, ImageReadMode.RGB)
         img1 = img1.permute(1, 2, 0)
-        if (self.zero123):
+        if self.zero123:
             img1[img1[:, :, -1] <= 1] = 255
-            img1 = img1 / 255.0
-            img1 = img1 * 2.0 - 1.0
-        else:
-            img1 = img1 / 255.0
+        img1 = (img1 / 127.5) - 1.0
+
         img2 = read_image(img2_path, ImageReadMode.RGB)
         img2 = img2.permute(1, 2, 0)
-        if (self.zero123):
+        if self.zero123:
             img2[img2[:, :, -1] <= 1] = 255
-            img2 = img2 / 255.0
-            img2 = img2 * 2.0 - 1.0
-        else:
-            img2 = img2 / 255.0
+        img2 = img2 / 255.0
+
         text = "An image"
         R1 = pose1[:, :3]
         T1 = pose1[:, 3]
@@ -286,16 +294,15 @@ class ObjaverseDataset(Dataset):
             jpg=img1,
             txt=text,
             hint=img2,
-            view=relative,
+            view=relative
         )
 
     def __len__(self):
-        return self.pairs
+        return self.pairs * len(self.objects)
 
     # pose2-pose1
     def relative_pose(self, R1, T1, R2, T2):
-        pw1 = np.dot(-(R1.T), T1)
-        pw2 = np.dot(-(R2.T), T2)
+        pw1, pw2 = np.dot(-R1.T, T1), np.dot(-R2.T, T2)
         r1, theta1, phi1 = self.cart2sph(pw1[0], pw1[1], pw1[2])
         r2, theta2, phi2 = self.cart2sph(pw2[0], pw2[1], pw2[2])
         theta = theta1 - theta2
@@ -313,7 +320,7 @@ class ObjaverseDataset(Dataset):
 
 
 if __name__ == '__main__':
-    data = ObjaverseDataset("../zero123/zero123/views_whole_sphere/2e0f1475bc7d41d9b914e540acf886ab", 100, True)
+    data = ObjaverseDataset("/DATA/disk1/cihai/yxd/zero123/zero123/views_whole_sphere", 100, True, True)
     loader = DataLoader(data, batch_size=1, shuffle=True)
     for result in loader:
         print(result["view_linear"])

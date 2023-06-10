@@ -9,7 +9,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from torch.utils.data import DataLoader
 
 from dataset_view import MyDataset
-from dataset_view3 import ObjaverseDataset
+from dataset_view4 import ObjaverseDataset
 from cldm.logger import ImageLogger
 from cldm.model import create_model, load_state_dict
 
@@ -33,6 +33,7 @@ only_mid_control = False
 checkpoint_callback = ModelCheckpoint(
     dirpath=args.checkdir,  # 'model_checkpoint_7',
     save_last=True,
+    every_n_train_steps=1000,
 )
 
 # First use cpu to load models. Pytorch Lightning will automatically move it to GPUs.
@@ -58,15 +59,42 @@ print('preparing dataset')
 #     dropout=0.1
 # )
 
-dataset = ObjaverseDataset(
+dataset_identity = ObjaverseDataset(
     path="../../../yxd/zero123/zero123/views_whole_sphere",
-    pairs=batch_size * grad_accum,
-    zero123=True
+    pairs=batch_size * grad_accum * 2,
+    zero123=True,
+    identity=True
 )
 
+dataset = ObjaverseDataset(
+    path="../../../yxd/zero123/zero123/views_whole_sphere",
+    pairs=batch_size * grad_accum * 2,
+    zero123=True,
+    identity=False
+)
+
+
+
 print('preparing dataset done')
-dataloader = DataLoader(dataset, num_workers=10, batch_size=batch_size, shuffle=True)
+dataloader_identity = DataLoader(dataset_identity, num_workers=5, batch_size=batch_size, shuffle=True)
+dataloader = DataLoader(dataset, num_workers=5, batch_size=batch_size, shuffle=True)
+
 logger = ImageLogger(batch_frequency=logger_freq, split=args.split)
+
+trainer_identity = pl.Trainer(
+    accelerator='gpu',
+    devices=1,
+    precision=16,
+    accumulate_grad_batches=grad_accum,
+    callbacks=[logger],
+    max_epochs=3
+)
+
+# Train!
+print('First train a identity map')
+trainer_identity.fit(model, dataloader_identity)
+
+print('Then make it adjust to different view')
 trainer = pl.Trainer(
     accelerator='gpu',
     devices=1,
@@ -75,7 +103,4 @@ trainer = pl.Trainer(
     callbacks=[logger, checkpoint_callback],
     max_epochs=10000
 )
-
-
-# Train!
 trainer.fit(model, dataloader)

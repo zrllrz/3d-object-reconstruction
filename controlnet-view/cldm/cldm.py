@@ -391,7 +391,6 @@ class ControlLDM(LatentDiffusion):
     def get_input(self, batch, k, bs=None, *args, **kwargs):
         with torch.no_grad():
             x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
-            # print('c_crossattn original shape:', c.shape)
             control = batch[self.control_key]
             view = batch[self.view_key]
             if bs is not None:
@@ -478,25 +477,15 @@ class ControlLDM(LatentDiffusion):
         log = dict()
         z, c = self.get_input(batch, self.first_stage_key, bs=N)
         c_cat = c["c_concat"][0][:N]
-        # hint_clip_embedding_ctrl, guided_view_linear = c["c_crossattn_ctrl"][0][:N], c["c_crossattn_ctrl"][1][:N]
         c_crossattn_ctrl = c["c_crossattn_ctrl"][0][:N]
         c_crossattn_diff = c["c_crossattn_diff"][0][:N]
         view_emb = c["view_emb"]
-        # uc_view = c["uc_view"]
         view_emb_uc = c["view_emb_uc"]
 
         N = min(z.shape[0], N)
         n_row = min(z.shape[0], n_row)
 
-        # x_T_posterior = self.encode_first_stage(c["c_concat"][0][:N])
-        # x_T = self.get_first_stage_encoding(x_T_posterior)
-        # noise_T = torch.randn_like(x_T)
-        # alpha_T = 0.999 * 0.999
-        # x_T = math.sqrt(alpha_T) * noise_T + math.sqrt(1.0 - alpha_T) * x_T
-
         log["target_view"] = (batch["jpg"].float()).permute(0, 3, 1, 2)
-        # log["hint_view"] = (batch["hint"].float()).permute(0, 3, 1, 2)
-        # log["reconstruction"] = self.decode_first_stage(z)
         log["control"] = c_cat * 2.0 - 1.0
         log["conditioning"] = log_txt_as_img((512, 512), batch[self.cond_stage_key], size=16)
 
